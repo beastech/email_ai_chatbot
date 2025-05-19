@@ -1,0 +1,1 @@
+az functionapp create --resource-group rg-brittbottomsai --name email-ai-fa --storage-account stbrittbotto849560174653 --consumption-plan-location eastus --runtime dotnet-isolated --functions-version 4 --os-type Windows --runtime-version 8
