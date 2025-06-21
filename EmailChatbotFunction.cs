@@ -109,6 +109,7 @@ public class EmailChatbotFunction
             {
                 messages = new[]
                 {
+                    new { role = "system", content = "You are a helpful, professional, and friendly email assistant. Always write clear, concise, and personalized responses that are relevant to the sender’s question. Avoid generic or overly formal language, and do not include any promotional or suspicious content. Ensure your reply sounds natural and human, and reference the sender’s original question when possible." },
                     new { role = "user", content = question }
                 }
             };
@@ -146,6 +147,10 @@ public class EmailChatbotFunction
             message.From.Add(MailboxAddress.Parse(fromEmail));
             message.To.Add(MailboxAddress.Parse(toEmail));
             message.Subject = subject;
+
+            // Add header indicating automated but legitimate content
+            //message.Headers.Add("X-Automated-Response", "true");
+            //message.Headers.Add("X-AI-Notice", "This email was generated automatically by a trusted system.");
 
             message.Body = new TextPart("plain")
             {
