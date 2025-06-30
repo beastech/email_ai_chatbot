@@ -24,7 +24,7 @@ public class EmailChatbotFunction
     }
 
     [Function("EmailChatbotFunction")]
-    public async Task Run([TimerTrigger("0 */5 * * * *")] MyInfo myTimer, FunctionContext context)
+    public async Task Run([TimerTrigger("*/30 * * * * *")] MyInfo myTimer, FunctionContext context)
     {
         var log = _logger;
         var imapHost = Environment.GetEnvironmentVariable("IMAP_Host");
