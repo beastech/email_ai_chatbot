@@ -4,6 +4,8 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.IO;
 using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Search;
@@ -17,6 +19,16 @@ using Newtonsoft.Json.Linq;
 public class EmailChatbotFunction
 {
     private readonly ILogger _logger;
+
+    // Supported image MIME types for GPT-4.1 multimodal
+    private static readonly HashSet<string> SupportedImageMimeTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/webp"
+    };
 
     public EmailChatbotFunction(ILoggerFactory loggerFactory)
     {
@@ -63,19 +75,54 @@ public class EmailChatbotFunction
                 var senderEmail = message.From.Mailboxes.FirstOrDefault()?.Address;
                 var questionText = message.TextBody ?? message.HtmlBody ?? "";
 
+                // Filter and extract supported image attachments
+                var imageAttachments = message.Attachments
+                    .Where(att => att is MimePart part && SupportedImageMimeTypes.Contains(part.ContentType.MimeType))
+                    .Cast<MimePart>()
+                    .ToList();
+
+                // Check for any unsupported attachments (not just images)
+                var unsupportedAttachments = message.Attachments
+                    .Where(att =>
+                        att is MimePart part &&
+                        !SupportedImageMimeTypes.Contains(part.ContentType.MimeType)
+                    )
+                    .Cast<MimePart>()
+                    .ToList();
+
+                if (unsupportedAttachments.Any())
+                {
+                    string supportedTypes = string.Join(", ", SupportedImageMimeTypes);
+                    string apology = $"Sorry, only the following image file types are supported: {supportedTypes}. Please resend your email with one of these formats.";
+                    await SendReplyEmail(smtpHost, smtpPort, smtpUser, smtpPass, imapUser, senderEmail, $"Re: {message.Subject}", apology, log);
+                    await inbox.AddFlagsAsync(uid, MailKit.MessageFlags.Seen, true);
+                    log.LogInformation($"Replied to {senderEmail} about unsupported attachment types.");
+                    continue;
+                }
+
+                var imageBase64List = new List<string>();
+                foreach (var img in imageAttachments)
+                {
+                    using var ms = new MemoryStream();
+                    img.Content.DecodeTo(ms);
+                    var base64 = Convert.ToBase64String(ms.ToArray());
+                    var mimeType = img.ContentType.MimeType;
+                    imageBase64List.Add($"data:{mimeType};base64,{base64}");
+                }
+
                 if (string.IsNullOrWhiteSpace(senderEmail))
                 {
                     log.LogWarning("Email has no sender address, skipping.");
                     continue;
                 }
 
-                if (string.IsNullOrWhiteSpace(questionText))
+                if (string.IsNullOrWhiteSpace(questionText) && !imageBase64List.Any())
                 {
-                    log.LogWarning("Email body is empty, skipping.");
+                    log.LogWarning("Email body and attachments are empty, skipping.");
                     continue;
                 }
 
-                var answer = await GetOpenAIResponse(questionText, openAiEndpoint, openAiKey, log);
+                var answer = await GetOpenAIResponse(questionText, imageBase64List, openAiEndpoint, openAiKey, log);
 
                 if (string.IsNullOrWhiteSpace(answer))
                 {
@@ -97,7 +144,7 @@ public class EmailChatbotFunction
         }
     }
 
-    private static async Task<string> GetOpenAIResponse(string question, string endpoint, string apiKey, ILogger log)
+    private static async Task<string> GetOpenAIResponse(string question, List<string> imageBase64List, string endpoint, string apiKey, ILogger log)
     {
         try
         {
@@ -105,12 +152,29 @@ public class EmailChatbotFunction
             httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
+            // Build multimodal content
+            var contentList = new List<object>();
+            if (!string.IsNullOrWhiteSpace(question))
+            {
+                contentList.Add(new { type = "text", text = question });
+            }
+            foreach (var img in imageBase64List)
+            {
+                contentList.Add(new { type = "image_url", image_url = new { url = img } });
+            }
+
             var payload = new
             {
-                messages = new[]
+                messages = new List<object>
                 {
-                    new { role = "system", content = "Your name is Gamesboro AI. You are a helpful, professional, and friendly email assistant. Always write clear, concise, and personalized responses that are relevant to the sender’s question. Avoid generic or overly formal language, and do not include any promotional or suspicious content. Ensure your reply sounds natural and human, referencing the sender’s original question when possible. When signing off, always format the closing as follows: Hope this is what you were looking for,\nGamesboro AI" },
-                    new { role = "user", content = question }
+                    new {
+                        role = "system",
+                        content = "Your name is Gamesboro AI. You are a helpful, professional, and friendly email assistant. Always write clear, concise, and personalized responses that are relevant to the sender’s question. Avoid generic or overly formal language, and do not include any promotional or suspicious content. Ensure your reply sounds natural and human, referencing the sender’s original question when possible. When signing off, always format the closing as follows: Hope this is what you were looking for,\nGamesboro AI"
+                    },
+                    new {
+                        role = "user",
+                        content = contentList
+                    }
                 }
             };
 
